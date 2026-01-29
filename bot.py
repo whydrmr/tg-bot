@@ -2,6 +2,9 @@ import os
 import logging
 from yt_dlp import YoutubeDL
 from telegram import Update
+import validators
+import sqlite3
+from os import getenv
 from telegram.ext import (
     filters,
     ApplicationBuilder,
@@ -10,7 +13,14 @@ from telegram.ext import (
     MessageHandler,
 )
 
-TOKEN = ""
+TOKEN = getenv("TG_TOKEN")
+if not TOKEN:
+    print("Error: TG_TOKEN environment variable not set.")
+    exit(1)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "statistics.db")
+
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -37,6 +47,10 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
     chat_id = update.effective_chat.id
 
+    if not validators.url(url):
+        await update.message.reply_text("This is not a valid URL.")
+        return
+
     await update.message.reply_text("Installation...")
 
     ydl_opts = {
@@ -55,13 +69,31 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         with open(filename, "rb") as f:
             await context.bot.send_video(chat_id=chat_id, video=f)
+
+        userid = str(update.effective_user.id)
+        with sqlite3.Connection(DB_PATH) as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                "INSERT INTO Statistics(userId, url) VALUES (?, ?)", (userid, url)
+            )
+            connection.commit()
+
         os.remove(filename)
 
     except Exception as e:
         await update.message.reply_text("Something went wrong...")
+        print(f"Failed to download and send video: \n{e}")
 
 
 if __name__ == "__main__":
+    print(f"main() : trying to open connection. Path: '{DB_PATH}'.")
+    with sqlite3.Connection(DB_PATH) as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS Statistics (userId TEXT, url TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)"
+        )
+        connection.commit()
+
     application = ApplicationBuilder().token(TOKEN).build()
 
     start_handler = CommandHandler("start", start)
